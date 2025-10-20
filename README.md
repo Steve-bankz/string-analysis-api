@@ -38,7 +38,7 @@ dotenv | Environment variable loader |
 
 ## 1 Clone the repository
 
-git clone https://github.com/your-username/string-analysis-api.git
+git clone https://github.com/Steve-bankz/string-analysis-api.git
 cd string-analysis-api
 
 ## 2 Install Dependencies
