@@ -5,6 +5,7 @@ import analyzeRoutes from "./routes/analyzeRoutes.js";
 import 'dotenv/config';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
+import cors from "cors";
 
 const dbPath = './db.json';
 if (!fs.existsSync(dbPath)) {
@@ -13,9 +14,11 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
+app.set('trust proxy', 1);
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per window
