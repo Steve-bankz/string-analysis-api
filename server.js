@@ -6,6 +6,9 @@ import 'dotenv/config';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 
+const app = express();
+app.use(express.json());
+const PORT = process.env.PORT || 3000;
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -26,11 +29,6 @@ if (!fs.existsSync(dbPath)) {
   fs.writeFileSync(dbPath, JSON.stringify({ analyses: [] }, null, 2));
   console.log(" db.json created automatically");
 }
-
-
-const app = express();
-app.use(express.json());
-const PORT = process.env.PORT || 3000;
 
 const adapter = new JSONFile("db.json");
 const db = new Low(adapter, { analyses: [] });
