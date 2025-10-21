@@ -10,7 +10,7 @@ console.log("Using SQLite database at:", dbPath);
 
 
 // Initialize SQLite database (file-based, not memory)
-const db = new Database("data.db");
+const db = new Database(dbPath);
 
 // Create table if not exists
 db.prepare(`
