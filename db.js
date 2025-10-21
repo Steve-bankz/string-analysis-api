@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import path from "path";
+
+const dbPath = path.resolve("/app/data", "data.db");
 
 // Initialize SQLite database (file-based, not memory)
 const db = new Database("data.db");
