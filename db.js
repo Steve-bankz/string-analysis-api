@@ -3,6 +3,9 @@ import path from "path";
 
 const dbPath = path.resolve("/app/data", "data.db");
 
+console.log("Using SQLite database at:", dbPath);
+
+
 // Initialize SQLite database (file-based, not memory)
 const db = new Database("data.db");
 
