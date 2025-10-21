@@ -1,7 +1,10 @@
 import Database from "better-sqlite3";
 import path from "path";
 
-const dbPath = path.resolve("/data", "data.db");
+const dbPath =
+  process.env.NODE_ENV === "production"
+    ? "/data/data.db"
+    : path.resolve("./data.db");
 
 console.log("Using SQLite database at:", dbPath);
 
