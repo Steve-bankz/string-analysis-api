@@ -1,9 +1,10 @@
 import express from "express";
-import analyzeRoutes from "./routes/analyzeRoutes.js";
 import 'dotenv/config';
 import rateLimit from 'express-rate-limit';
 import cors from "cors";
 import db from "./db.js";
+import analyzeRoutes from "./routes/analyzeRoutes/index.js";
+
 
 
 const app = express();
