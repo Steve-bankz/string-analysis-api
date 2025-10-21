@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import db from "../db.js";
 
 
 const router = express.Router();
@@ -33,7 +34,7 @@ function analyzeString(text) {
   };
 }
 
-router.post("/", async (req, res) => {
+router.post("/", (req, res) => {
   const { value } = req.body;
 
   if (value === undefined || value === null) {
@@ -50,17 +51,38 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: 'Bad Request: "value" cannot be empty' });
   }
 
-  const db = req.db;
   const trimmed = value.trim();
-  const id = sha256(trimmed);
+  const id = crypto.createHash("sha256").update(trimmed).digest("hex");
 
-  const existing = db.data.analyses.find(item => item.id === id);
+  // Check if already exists
+  const existing = db.prepare("SELECT * FROM analyses WHERE id = ?").get(id);
   if (existing) {
-    return res.status(409).json({ error: "Conflict: string already exists in the system" });
+    return res
+      .status(409)
+      .json({ error: "Conflict: string already exists in the system" });
   }
 
   const properties = analyzeString(trimmed);
   const createdAt = new Date().toISOString();
+
+  // Insert record
+  db.prepare(`
+    INSERT INTO analyses (
+      id, value, length, is_palindrome, unique_characters,
+      word_count, sha256_hash, character_frequency_map, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    trimmed,
+    properties.length,
+    properties.is_palindrome ? 1 : 0,
+    properties.unique_characters,
+    properties.word_count,
+    properties.sha256_hash,
+    JSON.stringify(properties.character_frequency_map),
+    createdAt
+  );
 
   const record = {
     id,
@@ -69,14 +91,10 @@ router.post("/", async (req, res) => {
     createdAt,
   };
 
-  db.data.analyses.push(record);
-  await db.write();
-
   return res.status(201).json(record);
 });
 
-router.get("/filter-by-natural-language", async (req, res) => {
-  const db = req.db;
+router.get("/filter-by-natural-language", (req, res) => {
   const { query } = req.query;
 
   if (!query || typeof query !== "string" || query.trim().length === 0) {
@@ -91,14 +109,16 @@ router.get("/filter-by-natural-language", async (req, res) => {
   const conflicts = [];
 
   try {
+    // Detect palindrome filters
     if (q.includes("palindrome")) {
       if (q.includes("not palindrome") || q.includes("non-palindrome")) {
-        parsedFilters.is_palindrome = false;
+        parsedFilters.is_palindrome = 0;
       } else {
-        parsedFilters.is_palindrome = true;
+        parsedFilters.is_palindrome = 1;
       }
     }
 
+    // Length-based filters
     const longerMatch = q.match(/longer than (\d+)/);
     const shorterMatch = q.match(/shorter than (\d+)/);
     const exactlyMatch = q.match(/exactly (\d+) characters?/);
@@ -130,7 +150,6 @@ router.get("/filter-by-natural-language", async (req, res) => {
       });
     }
 
-    // If nothing was parsed
     if (Object.keys(parsedFilters).length === 0) {
       return res.status(400).json({
         status: 400,
@@ -138,39 +157,55 @@ router.get("/filter-by-natural-language", async (req, res) => {
       });
     }
 
-    // Apply filters to DB
-    let results = db.data.analyses;
+    // 🔍 Build dynamic SQL query
+    let sql = "SELECT * FROM analyses WHERE 1=1";
+    const params = [];
 
-    if (parsedFilters.is_palindrome !== undefined)
-      results = results.filter(
-        (r) => r.properties.is_palindrome === parsedFilters.is_palindrome
-      );
+    if (parsedFilters.is_palindrome !== undefined) {
+      sql += " AND is_palindrome = ?";
+      params.push(parsedFilters.is_palindrome);
+    }
 
-    if (parsedFilters.min_length !== undefined)
-      results = results.filter(
-        (r) => r.properties.length >= parsedFilters.min_length
-      );
+    if (parsedFilters.min_length !== undefined) {
+      sql += " AND length >= ?";
+      params.push(parsedFilters.min_length);
+    }
 
-    if (parsedFilters.max_length !== undefined)
-      results = results.filter(
-        (r) => r.properties.length <= parsedFilters.max_length
-      );
+    if (parsedFilters.max_length !== undefined) {
+      sql += " AND length <= ?";
+      params.push(parsedFilters.max_length);
+    }
 
-    if (parsedFilters.word_count !== undefined)
-      results = results.filter(
-        (r) => r.properties.word_count === parsedFilters.word_count
-      );
+    if (parsedFilters.word_count !== undefined) {
+      sql += " AND word_count = ?";
+      params.push(parsedFilters.word_count);
+    }
 
-    if (parsedFilters.contains_character !== undefined)
-      results = results.filter((r) =>
-        r.value
-          .toLowerCase()
-          .includes(parsedFilters.contains_character.toLowerCase())
-      );
+    if (parsedFilters.contains_character !== undefined) {
+      sql += " AND LOWER(value) LIKE ?";
+      params.push(`%${parsedFilters.contains_character.toLowerCase()}%`);
+    }
+
+    const results = db.prepare(sql).all(...params);
+
+    // Convert frequency map string back to object
+    const formattedResults = results.map(r => ({
+      id: r.id,
+      value: r.value,
+      properties: {
+        length: r.length,
+        is_palindrome: !!r.is_palindrome,
+        unique_characters: r.unique_characters,
+        word_count: r.word_count,
+        sha256_hash: r.sha256_hash,
+        character_frequency_map: JSON.parse(r.character_frequency_map),
+      },
+      createdAt: r.created_at,
+    }));
 
     return res.status(200).json({
-      data: results,
-      count: results.length,
+      data: formattedResults,
+      count: formattedResults.length,
       interpreted_query: {
         original: query,
         parsed_filters: parsedFilters,
@@ -185,14 +220,15 @@ router.get("/filter-by-natural-language", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
-  const db = req.db;
+router.get("/", (req, res) => {
   const { is_palindrome, min_length, max_length, word_count, contains_character } = req.query;
 
   const filtersApplied = {};
-  let results = db.data.analyses;
+  const params = [];
+  let sql = "SELECT * FROM analyses WHERE 1=1";
 
   try {
+    // 🔹 is_palindrome
     if (is_palindrome !== undefined) {
       if (is_palindrome !== "true" && is_palindrome !== "false") {
         return res.status(400).json({
@@ -200,12 +236,13 @@ router.get("/", async (req, res) => {
           error: 'Bad Request: invalid query parameter "is_palindrome" (must be true or false)',
         });
       }
-      const boolVal = is_palindrome === "true";
-      results = results.filter((item) => item.properties.is_palindrome === boolVal);
-      filtersApplied.is_palindrome = boolVal;
+      const boolVal = is_palindrome === "true" ? 1 : 0;
+      sql += " AND is_palindrome = ?";
+      params.push(boolVal);
+      filtersApplied.is_palindrome = boolVal === 1;
     }
 
-    // min_length
+    // 🔹 min_length
     if (min_length !== undefined) {
       const min = parseInt(min_length);
       if (isNaN(min) || min < 0) {
@@ -214,11 +251,12 @@ router.get("/", async (req, res) => {
           error: 'Bad Request: invalid "min_length" (must be a non-negative number)',
         });
       }
-      results = results.filter((item) => item.properties.length >= min);
+      sql += " AND length >= ?";
+      params.push(min);
       filtersApplied.min_length = min;
     }
 
-    // max_length
+    // 🔹 max_length
     if (max_length !== undefined) {
       const max = parseInt(max_length);
       if (isNaN(max) || max < 0) {
@@ -227,11 +265,12 @@ router.get("/", async (req, res) => {
           error: 'Bad Request: invalid "max_length" (must be a non-negative number)',
         });
       }
-      results = results.filter((item) => item.properties.length <= max);
+      sql += " AND length <= ?";
+      params.push(max);
       filtersApplied.max_length = max;
     }
 
-    // word_count
+    // 🔹 word_count
     if (word_count !== undefined) {
       const wc = parseInt(word_count);
       if (isNaN(wc) || wc < 0) {
@@ -240,11 +279,12 @@ router.get("/", async (req, res) => {
           error: 'Bad Request: invalid "word_count" (must be a non-negative number)',
         });
       }
-      results = results.filter((item) => item.properties.word_count === wc);
+      sql += " AND word_count = ?";
+      params.push(wc);
       filtersApplied.word_count = wc;
     }
 
-    // contains_character
+    // 🔹 contains_character
     if (contains_character !== undefined) {
       if (typeof contains_character !== "string" || contains_character.length === 0) {
         return res.status(400).json({
@@ -253,15 +293,31 @@ router.get("/", async (req, res) => {
         });
       }
       const char = contains_character.toLowerCase();
-      results = results.filter((item) =>
-        item.value.toLowerCase().includes(char)
-      );
+      sql += " AND LOWER(value) LIKE ?";
+      params.push(`%${char}%`);
       filtersApplied.contains_character = char;
     }
 
-    // Return matched data
+    // 🔍 Run the query
+    const results = db.prepare(sql).all(...params);
+
+    // 🧠 Format for output
+    const formattedResults = results.map((r) => ({
+      id: r.id,
+      value: r.value,
+      properties: {
+        length: r.length,
+        is_palindrome: !!r.is_palindrome,
+        unique_characters: r.unique_characters,
+        word_count: r.word_count,
+        sha256_hash: r.sha256_hash,
+        character_frequency_map: JSON.parse(r.character_frequency_map),
+      },
+      createdAt: r.created_at,
+    }));
+
     return res.status(200).json({
-      data: results,
+      data: formattedResults,
       filters_applied: filtersApplied,
     });
   } catch (err) {
@@ -274,11 +330,10 @@ router.get("/", async (req, res) => {
 });
 
 
-router.get("/:value", async (req, res) => {
+router.get("/:value", (req, res) => {
   const { value } = req.params;
-  const db = req.db;
 
-  // Validate that value is a non-empty string
+  // 🔹 Validate input
   if (!value || typeof value !== "string") {
     return res.status(400).json({
       status: 400,
@@ -286,27 +341,43 @@ router.get("/:value", async (req, res) => {
     });
   }
 
-  // Hash it to match stored record IDs (sha256 of value)
-  const id = crypto.createHash("sha256").update(value).digest("hex");
+  // 🔹 Generate SHA-256 ID for lookup
+  const id = crypto.createHash("sha256").update(value.trim()).digest("hex");
 
-  // Search for matching record
-  const result = db.data.analyses.find((item) => item.id === id);
+  // 🔹 Query the database
+  const record = db.prepare("SELECT * FROM analyses WHERE id = ?").get(id);
 
-  if (!result) {
+  // 🔹 Handle not found
+  if (!record) {
     return res.status(404).json({
       status: 404,
       error: "Not Found: string does not exist in the system",
     });
   }
 
-  res.status(200).json(result);
+  // 🔹 Reformat result to match original response structure
+  const result = {
+    id: record.id,
+    value: record.value,
+    properties: {
+      length: record.length,
+      is_palindrome: !!record.is_palindrome,
+      unique_characters: record.unique_characters,
+      word_count: record.word_count,
+      sha256_hash: record.sha256_hash,
+      character_frequency_map: JSON.parse(record.character_frequency_map),
+    },
+    createdAt: record.created_at,
+  };
+
+  // ✅ Success
+  return res.status(200).json(result);
 });
 
-router.delete("/:value", async (req, res) => {
+router.delete("/:value", (req, res) => {
   const { value } = req.params;
-  const db = req.db;
 
-  // Validate
+  // 🔹 Validate
   if (!value || typeof value !== "string") {
     return res.status(400).json({
       status: 400,
@@ -314,24 +385,22 @@ router.delete("/:value", async (req, res) => {
     });
   }
 
-  // Compute hash ID
-  const id = crypto.createHash("sha256").update(value).digest("hex");
+  // 🔹 Compute SHA-256 hash to identify the record
+  const id = crypto.createHash("sha256").update(value.trim()).digest("hex");
 
-  // Find index of the record
-  const index = db.data.analyses.findIndex((item) => item.id === id);
-
-  if (index === -1) {
+  // 🔹 Check if record exists
+  const existing = db.prepare("SELECT * FROM analyses WHERE id = ?").get(id);
+  if (!existing) {
     return res.status(404).json({
       status: 404,
       error: "Not Found: string does not exist in the system",
     });
   }
 
-  // Remove from DB
-  db.data.analyses.splice(index, 1);
-  await db.write();
+  // 🔹 Delete it
+  db.prepare("DELETE FROM analyses WHERE id = ?").run(id);
 
-  // 204 No Content — empty body
+  // ✅ 204 No Content
   return res.status(204).send();
 });
 

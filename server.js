@@ -1,17 +1,10 @@
 import express from "express";
-import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import analyzeRoutes from "./routes/analyzeRoutes.js";
 import 'dotenv/config';
-import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import cors from "cors";
+import db from "./db.js";
 
-const dbPath = './db.json';
-if (!fs.existsSync(dbPath)) {
-  fs.writeFileSync(dbPath, JSON.stringify({ analyses: [] }, null, 2));
-  console.log(" db.json created automatically");
-}
 
 const app = express();
 app.use(cors());
@@ -31,10 +24,6 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
-
-const adapter = new JSONFile("db.json");
-const db = new Low(adapter, { analyses: [] });
-await db.read();
 
 app.use((req, res, next) => {
   req.db = db;

@@ -1,0 +1,22 @@
+import Database from "better-sqlite3";
+
+// Initialize SQLite database (file-based, not memory)
+const db = new Database("data.db");
+
+// Create table if not exists
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS analyses (
+    id TEXT PRIMARY KEY,
+    value TEXT UNIQUE NOT NULL,
+    length INTEGER,
+    is_palindrome BOOLEAN,
+    unique_characters INTEGER,
+    word_count INTEGER,
+    character_frequency_map TEXT,
+    sha256_hash TEXT,
+    created_at TEXT
+  )
+`).run();
+
+
+export default db;
